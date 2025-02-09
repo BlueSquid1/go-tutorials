@@ -1,0 +1,64 @@
+<!--test-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mortgage Calculator</title>
+    <link rel="stylesheet" href="index.css">
+</head>
+<body>
+    <div class="container">
+        <h2>Mortgage Calculator</h2>
+        <form id="mortgage-form">
+            <label for="amount">Mortgage Amount:</label>
+            <input type="number" id="amount" name="amount" value="300000" required>
+
+            <label for="interest">Yearly Interest Rate (%):</label>
+            <input type="number" id="interest" name="interest" step="0.01" value="6.0" required>
+
+            <label for="years">Years Left on Loan:</label>
+            <input type="number" id="years" name="years" value="30.0" required>
+
+            <button type="submit">Calculate</button>
+        </form>
+        
+        <h3>Results</h3>
+        <label for="principal">Monthly Principal Payment:</label>
+        <input type="text" id="principal" readonly>
+
+        <label for="interest-payment">Monthly Interest Payment:</label>
+        <input type="text" id="interest-payment" readonly>
+
+        <label for="total-payment">Total Monthly Payment:</label>
+        <input type="text" id="total-payment" readonly>
+    </div>
+
+    <script>
+        document.getElementById('mortgage-form').addEventListener('submit', async function(event) {
+            event.preventDefault();
+            
+            const amount = document.getElementById('amount').value;
+            const interest = document.getElementById('interest').value;
+            const years = document.getElementById('years').value;
+            
+            const response = await fetch('http://localhost:8000/api/v1/mortgage', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    amount: parseFloat(amount),
+                    interest: parseFloat(interest),
+                    years: parseFloat(years)
+                })
+            });
+            
+            const data = await response.json();
+            document.getElementById('principal').value = "$" + Number(data.monthly_principal_payment).toFixed(2);
+            document.getElementById('interest-payment').value = "$" + Number(data.monthly_interest_payment).toFixed(2);
+            document.getElementById('total-payment').value = "$" + Number(data.total_monthly_payment).toFixed(2);
+        });
+    </script>
+</body>
+</html>

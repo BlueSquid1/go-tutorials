@@ -10,32 +10,28 @@ import (
 	"golang.org/x/net/html"
 )
 
-type BreadthExtractor struct {
-	seen map[string]bool
-}
-
 type UrlExtractorType func(item string) ([]string, error)
 
-func (b *BreadthExtractor) BreadthFirst(f UrlExtractorType, workList []string) ([]string, error) {
-	newWorkItems := []string{}
-	for _, workItem := range workList {
-		if !b.seen[workItem] {
-			b.seen[workItem] = true
-			newUrls, err := f(workItem)
-			if err != nil {
-				return nil, fmt.Errorf("failed to call lambda with url %s: %v", workItem, err)
+func BreadthFirst(f UrlExtractorType, workList []string) ([]string, error) {
+	seen := make(map[string]bool)
+
+	for len(workList) > 0 {
+		items := workList
+		workList = nil
+		for _, item := range items {
+			if !seen[item] {
+				seen[item] = true
+				childResults, err := f(item)
+				if err != nil {
+					return nil, fmt.Errorf("lambda failed for url %s: %v", item, err)
+				}
+				workList = append(workList, childResults...)
 			}
-			newWorkItems = append(newWorkItems, newUrls...)
 		}
 	}
-
-	if len(newWorkItems) > 0 {
-		b.BreadthFirst(f, newWorkItems)
-	}
-
-	urls := make([]string, len(b.seen))
+	urls := make([]string, len(seen))
 	i := 0
-	for k := range b.seen {
+	for k := range seen {
 		urls[i] = k
 		i++
 	}
@@ -97,9 +93,7 @@ func main() {
 		log.Fatal("please pass a url")
 	}
 
-	b := BreadthExtractor{}
-	b.seen = make(map[string]bool)
-	urls, err := b.BreadthFirst(ExtractUrls, args)
+	urls, err := BreadthFirst(ExtractUrls, args)
 	if err != nil {
 		log.Fatal(err)
 	}
