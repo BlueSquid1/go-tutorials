@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sync"
+	"time"
 
 	"golang.org/x/net/html"
 )
@@ -59,17 +61,24 @@ func getHtmlFromUrl(url string) (*html.Node, error) {
 	return doc, nil
 }
 
-func ExtractParallel(worklist chan []string, link string) {
+func ExtractParallel(worklist chan []string, link string, n *sync.WaitGroup, done chan struct{}) {
+	defer n.Done()
+	// artifically slow extractor to see performance
+	time.Sleep(time.Second)
 	futureWork, err := ExtractUrls(link)
 	if err != nil {
 		fmt.Printf("failed to extract url: %v\n", err)
-		worklist <- []string{}
-	} else {
-		worklist <- futureWork
+		futureWork = []string{}
+	}
+	// if done has been closed then don't write to the worklist
+	select {
+	case <-done:
+	case worklist <- futureWork:
 	}
 }
 
 func main() {
+	// This does a breadth first search for all links on a website
 	args := os.Args[1:]
 	if len(args) < 1 {
 		log.Fatal("please pass a url")
@@ -77,35 +86,83 @@ func main() {
 
 	GroupsOfUrls := [][]string{args}
 
-	worklist := make(chan []string)
+	done := make(chan struct{})
+	go func() {
+		// press ctrl + D to stop
+		os.Stdin.Read(make([]byte, 1))
+		// closing the channel means that the select statement will trigger
+		// indefinately for any reads to this channel
+		close(done)
+	}()
 
+	// Only allow up to 5 extractors to run at a time.
+	sem := make(chan struct{}, 5)
+
+	// Only run extractor on URLs that haven't been seen before.
 	seen := make(map[string]bool)
+
+	enableVerbose := true
+	// tick defaults to null
+	var tick <-chan time.Time
+	if enableVerbose {
+		tick = time.Tick(500 * time.Millisecond)
+	}
 
 	depth := 0
 	for len(GroupsOfUrls) > 0 {
-		fmt.Printf("search depth is: %v\n", depth)
+		// Results from each extractor is store in this channel.
+		worklist := make(chan []string)
+
 		depth++
-		currentWorkers := 0
+		var n sync.WaitGroup
 		// extract out urls from lists of urls
 		for _, list := range GroupsOfUrls {
-			// create goroutines
 			for _, link := range list {
 				if !seen[link] {
-					fmt.Printf("exploring url: %v\n", link)
+					// wait if more than 5 gorountines are running
+					sem <- struct{}{}
+					defer func() { <-sem }()
+
 					seen[link] = true
-					currentWorkers++
-					go ExtractParallel(worklist, link)
+					// Count each gorountine that starts
+					n.Add(1)
+					go ExtractParallel(worklist, link, &n, done)
 				}
 			}
 		}
+		go func() {
+			// Wait for all gorountines for this depth to finish
+			n.Wait()
+			// when a channel is closed, all the existing values can still be read
+			// after all the values have been read it will return the default value
+			// for the channel type for infinite.
+			close(worklist)
+		}()
+
+		// clear the URLs so the urls for the next depth level can been appended
 		GroupsOfUrls = [][]string{}
-		// Wait for all gorountines for this depth to finish
-		for i := 0; i < currentWorkers; i++ {
-			futureWork := <-worklist
-			if len(futureWork) > 0 {
+		// look over channel. Will only stop looping once all values have been read from the closed channel.
+	loop:
+		for {
+			select {
+			case futureWork, ok := <-worklist:
+				if !ok {
+					break loop
+				}
 				GroupsOfUrls = append(GroupsOfUrls, futureWork)
+			case <-tick: // if tick defaults to null then this case will never occur
+				fmt.Printf("Currently at depth: %v, total URLs seen: %v\n", depth, len(seen))
+			case <-done:
+				// Cancel current goroutines
+				close(worklist)
+				fmt.Println("exit early")
+				return
 			}
 		}
 	}
 
+	fmt.Println("URLs seen:")
+	for k := range seen {
+		fmt.Println(k)
+	}
 }
