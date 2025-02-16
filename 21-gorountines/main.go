@@ -73,19 +73,23 @@ func ExtractParallel(worklist chan []string, link string, n *sync.WaitGroup, don
 	// if done has been closed then don't write to the worklist
 	select {
 	case <-done:
-	case worklist <- futureWork:
+	default:
+		worklist <- futureWork
 	}
 }
 
-func main() {
-	// This does a breadth first search for all links on a website
-	args := os.Args[1:]
-	if len(args) < 1 {
-		log.Fatal("please pass a url")
+func MapToSlice(input map[string]bool) []string {
+	results := []string{}
+	for k := range input {
+		results = append(results, k)
 	}
+	return results
+}
 
+func ExtractorMain(args []string) []string {
 	GroupsOfUrls := [][]string{args}
 
+	// Channel used to stop early.
 	done := make(chan struct{})
 	go func() {
 		// press ctrl + D to stop
@@ -98,7 +102,6 @@ func main() {
 	// Only allow up to 5 extractors to run at a time.
 	sem := make(chan struct{}, 5)
 
-	// Only run extractor on URLs that haven't been seen before.
 	seen := make(map[string]bool)
 
 	enableVerbose := true
@@ -109,18 +112,27 @@ func main() {
 	}
 
 	depth := 0
+	// keep on looping while there is more URLs to explore
 	for len(GroupsOfUrls) > 0 {
 		// Results from each extractor is store in this channel.
 		worklist := make(chan []string)
 
 		depth++
+
+		// Wait group is used to known how many gorountines are running
 		var n sync.WaitGroup
-		// extract out urls from lists of urls
+		// kick off the gorountine workers
+	workerLoop:
 		for _, list := range GroupsOfUrls {
 			for _, link := range list {
 				if !seen[link] {
 					// wait if more than 5 gorountines are running
-					sem <- struct{}{}
+					select {
+					case sem <- struct{}{}:
+					case <-done:
+						break workerLoop
+					}
+
 					defer func() { <-sem }()
 
 					seen[link] = true
@@ -134,35 +146,46 @@ func main() {
 			// Wait for all gorountines for this depth to finish
 			n.Wait()
 			// when a channel is closed, all the existing values can still be read
-			// after all the values have been read it will return the default value
-			// for the channel type for infinite.
 			close(worklist)
 		}()
 
 		// clear the URLs so the urls for the next depth level can been appended
 		GroupsOfUrls = [][]string{}
 		// look over channel. Will only stop looping once all values have been read from the closed channel.
-	loop:
+	resultsLoop:
 		for {
 			select {
 			case futureWork, ok := <-worklist:
 				if !ok {
-					break loop
+					// All values have been read and the channel has been closed
+					break resultsLoop
 				}
 				GroupsOfUrls = append(GroupsOfUrls, futureWork)
 			case <-tick: // if tick defaults to null then this case will never occur
 				fmt.Printf("Currently at depth: %v, total URLs seen: %v\n", depth, len(seen))
-			case <-done:
-				// Cancel current goroutines
-				close(worklist)
+			case <-done: // early exit
+				// wait for all current workers to finish
+				for range worklist {
+				}
 				fmt.Println("exit early")
-				return
+				return MapToSlice(seen)
 			}
 		}
 	}
 
-	fmt.Println("URLs seen:")
-	for k := range seen {
-		fmt.Println(k)
+	return MapToSlice(seen)
+}
+
+func main() {
+	// This does a breadth first search for all links on a website
+	args := os.Args[1:]
+	if len(args) < 1 {
+		log.Fatal("please pass a url")
+	}
+
+	results := ExtractorMain(args)
+	fmt.Println("results:")
+	for _, result := range results {
+		fmt.Println(result)
 	}
 }
