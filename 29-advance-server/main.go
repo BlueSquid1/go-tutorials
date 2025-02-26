@@ -84,6 +84,10 @@ func (db *database) delete(w http.ResponseWriter, req *http.Request) {
 }
 
 func main() {
+	// there are a lot of things wrong with this example
+	// Each handle function is called on a different goroutine so need to make sure access
+	// to the database is thread safe. Also it is good practise to seperate the handle interface
+	// from the database logic which this example does not do.
 	db := database{"shoes": 50, "socks": 5}
 	http.HandleFunc("GET /list", db.list)
 	http.HandleFunc("GET /price", db.price)
