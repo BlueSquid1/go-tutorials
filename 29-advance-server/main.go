@@ -2,97 +2,81 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"log"
+	"main/db"
 	"net/http"
+	"strconv"
 )
 
-type dollars float32
+type ClothStore struct {
+	db *db.Database
+}
 
-func (d dollars) String() string { return fmt.Sprintf("$%.2f", d) }
-
-type database map[string]dollars
-
-func (db *database) list(w http.ResponseWriter, req *http.Request) {
-	for item, price := range *db {
-		fmt.Fprintf(w, "%v: %v\n", item, price)
+func (cs *ClothStore) list(w http.ResponseWriter, r *http.Request) {
+	items := cs.db.GetAllItems()
+	for item, price := range items {
+		fmt.Fprintf(w, "%s: %s\n", item, price)
 	}
 }
 
-func (db *database) price(w http.ResponseWriter, req *http.Request) {
-	item := req.URL.Query().Get("item")
-	price, ok := (*db)[item]
+func (cs *ClothStore) price(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		log.Fatal(err)
+	}
+	items, ok := r.Form["item"]
 	if !ok {
-		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprintf(w, "can not find %v\n", item)
-		return
+		log.Fatal("can't find item")
 	}
-	fmt.Fprintf(w, "%v\n", price)
+	if len(items) != 1 {
+		log.Fatalf("expect item slice to be size 1 but got: %d", len(items))
+	}
+	item := items[0]
+	price, err := cs.db.GetPrice(item)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Fprintf(w, "%s\n", price)
 }
 
-func (db *database) create(w http.ResponseWriter, req *http.Request) {
-	data, err := io.ReadAll(req.Body)
-	defer req.Body.Close()
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprintf(w, "body is invalid\n")
+func (cs *ClothStore) create(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		log.Fatal(err)
 	}
-	text := string(data)
-	var item string
-	var price dollars
-	_, err = fmt.Sscanf(text, "%s%v", &item, &price)
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprintf(w, "body is invalid\n")
-	}
-	(*db)[item] = price
-}
-
-func (db *database) update(w http.ResponseWriter, req *http.Request) {
-	item := req.URL.Query().Get("item")
-	_, ok := (*db)[item]
+	items, ok := r.Form["item"]
 	if !ok {
-		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprintf(w, "can not find %v\n", item)
-		return
+		log.Fatal("can't find item")
 	}
-	data, err := io.ReadAll(req.Body)
-	defer req.Body.Close()
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprintf(w, "body is invalid\n")
+	if len(items) != 1 {
+		log.Fatalf("expect item slice to be size 1 but got: %d", len(items))
 	}
-	text := string(data)
-	var newPrice dollars
-	_, err = fmt.Sscanf(text, "%v", &newPrice)
-	if err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprintf(w, "body is invalid2\n")
-	}
-	(*db)[item] = newPrice
-}
+	item := items[0]
 
-func (db *database) delete(w http.ResponseWriter, req *http.Request) {
-	item := req.URL.Query().Get("item")
-	_, ok := (*db)[item]
+	prices, ok := r.Form["price"]
 	if !ok {
-		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprintf(w, "can not find %v\n", item)
-		return
+		log.Fatal("can't find price")
 	}
-	delete(*db, item)
+	if len(prices) != 1 {
+		log.Fatalf("expect price slice to be size 1 but got: %d", len(prices))
+	}
+	priceStr := prices[0]
+	priceF64, err := strconv.ParseFloat(priceStr, 32)
+	if err != nil {
+		log.Fatal(err)
+	}
+	price := db.Dollars(priceF64)
+
+	cs.db.CreateItem(item, price)
 }
 
 func main() {
-	// there are a lot of things wrong with this example
 	// Each handle function is called on a different goroutine so need to make sure access
-	// to the database is thread safe. Also it is good practise to seperate the handle interface
-	// from the database logic which this example does not do.
-	db := database{"shoes": 50, "socks": 5}
-	http.HandleFunc("GET /list", db.list)
-	http.HandleFunc("GET /price", db.price)
-	http.HandleFunc("POST /price", db.create)
-	http.HandleFunc("MODIFY /price", db.update)
-	http.HandleFunc("DELETE /price", db.delete)
+	// to the database is thread safe.
+	defaults := map[string]db.Dollars{"shoes": 50, "socks": 5}
+	db := db.NewDatabase(defaults)
+	cs := ClothStore{db: db}
+
+	http.HandleFunc("GET /list", cs.list)
+	http.HandleFunc("GET /price", cs.price)
+	http.HandleFunc("POST /price", cs.create)
 	log.Fatal(http.ListenAndServe("localhost:8000", nil)) // tells go to use global http handler
 }
